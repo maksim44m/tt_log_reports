@@ -1,14 +1,33 @@
 import sys
 from pathlib import Path
+import pytest
 sys.path.append(str(Path(__file__).parent.parent))
 
-from reporter import HandlersReport, ReportFactory, BaseReport
+from reporter import HandlersReport, ReportFactory, BaseReport, LogParser
 
 
 TEST_DIR = Path(__file__).parent.absolute()
 
 
+def test_log_parser():
+    """Тест на парсинг строки лога"""
+    parser = LogParser()
+    
+    # Валидная строка
+    line = '2025-03-28 12:44:46,000 INFO django.request: GET /api/v1/reviews/ 204 OK [192.168.1.59]'
+    result = parser.parse_line(line)
+    assert result['timestamp'] == '2025-03-28 12:44:46,000'
+    assert result['level'] == 'INFO'
+    assert result['module'] == 'django.request'
+    assert result['message'] == 'GET /api/v1/reviews/ 204 OK [192.168.1.59]'
+    
+    # Невалидная строка
+    result = parser.parse_line('invalid log line')
+    assert result == {}
+
+
 def test_handlers_report_merge():
+    """Тест на слияние отчетов"""
     report1 = HandlersReport()
     report1.count['/api/v1/users']['INFO'] = 5
     report1.count['/api/v1/products']['ERROR'] = 2
@@ -25,7 +44,27 @@ def test_handlers_report_merge():
     assert report1.count['/api/v1/cart']['INFO'] == 1
 
 
+def test_handlers_report_merge_invalid_type():
+    class TestReport(BaseReport):
+        def merge(self, others):
+            pass
+
+        def run(self, path):
+            return self
+
+        def print_report(self):
+            pass
+    
+    report1 = HandlersReport()
+    report2 = TestReport()  # Неправильный тип
+    
+    with pytest.raises(TypeError) as exc_info:
+        report1.merge([report2])
+    assert 'Ожидается HandlersReport' in str(exc_info.value)
+
+
 def test_handlers_report_run():
+    """Тест на запуск формирования отчета"""
     report = HandlersReport()
     result = report.run(TEST_DIR / 'test.txt')
 
@@ -42,7 +81,17 @@ def test_handlers_report_run():
     assert report.count['/admin/login/']['INFO'] == 1
 
 
+def test_handlers_report_run_invalid_file():
+    """Тест на запуск формирования отчета для несуществующего файла"""
+    report = HandlersReport()
+    with pytest.raises(Exception) as exc_info:
+        report.run(TEST_DIR / 'nonexistent.txt')
+    assert not report.count
+    assert 'Ошибка при чтении файла' in str(exc_info.value)
+
+
 def test_handlers_report_print(capsys):
+    """Тест на вывод отчета"""
     report = HandlersReport()
     report.count['/api/v1/users']['INFO'] = 5
     report.count['/api/v1/products']['ERROR'] = 2
@@ -57,19 +106,22 @@ def test_handlers_report_print(capsys):
     assert '/api/v1/cart' in captured.out
     assert 'INFO' in captured.out
     assert 'ERROR' in captured.out
+    assert 'WARNING' in captured.out
+    assert 'DEBUG' in captured.out
+    assert 'CRITICAL' in captured.out
 
 
 def test_report_factory():
+    """Тест на создание объекта отчета заданного типа"""
     report = ReportFactory.get_report('handlers')
     assert isinstance(report, HandlersReport)
 
 
 def test_report_factory_invalid_type():
-    try:
+    """Тест на создание отчета с неизвестным типом"""
+    with pytest.raises(ValueError) as exc_info:
         ReportFactory.get_report('invalid')
-        assert False, 'Должно быть исключение'
-    except ValueError as e:
-        assert 'Неизвестный тип отчета' in str(e)
+    assert 'Неизвестный тип отчета' in str(exc_info.value)
 
 
 

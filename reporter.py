@@ -2,7 +2,7 @@ import re
 from abc import ABC, abstractmethod
 from collections import defaultdict, Counter
 from pathlib import Path
-from typing import List
+from typing import List, Dict, Optional
 
 
 class BaseReport(ABC):
@@ -23,15 +23,7 @@ class HandlersReport(BaseReport):
     def __init__(self):
         # словарь словарей, где ключ - ручка, значение - словарь с ключами - уровень и значениями - количество
         self.count: defaultdict[str, Counter[str]] = defaultdict(Counter)
-
-        self.match_pattern = re.compile(
-            r'^'  # время - уровень - модуль - сообщение
-            r'(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
-            r'(?P<level>[A-Z]+)\s+'
-            r'(?P<module>[\w\.]+):\s+'
-            r'(?P<message>.*)'
-            r'$'
-        )
+        self.parser = LogParser()
 
     def merge(self, others: List[BaseReport]) -> None:
         for report in others:
@@ -40,25 +32,25 @@ class HandlersReport(BaseReport):
             for handler, count in report.count.items():
                 self.count[handler].update(count)
 
-    def run(self, path: Path) -> BaseReport:
+    def run(self, path: Path) -> Optional[BaseReport]:
         handle_pattern = re.compile(r'/\S+')  # ручка
         try:
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
-                    match = self.match_pattern.match(line)
-                    if not match:
-                        continue
+                    match = self.parser.parse_line(line)                    
                     
-                    level = match.group('level')
-                    message = match.group('message')
+                    level = match.get('level', '')
+                    message = match.get('message', '')
                     
                     handle = handle_pattern.search(message)
                     if handle:
                         self.count[handle.group(0)][level] += 1
+
         except Exception as e:
-            print(f'Ошибка при чтении файла {path}: {e}')
+            raise Exception(f'Ошибка при чтении файла {path}: {e}')
         
         return self
+        
     
     def print_report(self) -> None:
         total_levels_count = Counter()
@@ -78,6 +70,22 @@ class HandlersReport(BaseReport):
             print(line)
         print(f"{'':<{max_len_handler}}{''.join([f'{total_levels_count[lvl]:>10}' for lvl in static_levels])}")
 
+class LogParser:
+    def __init__(self):
+            self.match_pattern = re.compile(
+                r'^'  # время - уровень - модуль - сообщение
+                r'(?P<timestamp>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d{3})\s+'
+                r'(?P<level>[A-Z]+)\s+'
+                r'(?P<module>[\w\.]+):\s+'
+                r'(?P<message>.*)'
+                r'$'
+            )
+    
+    def parse_line(self, line: str) -> Dict[str, str]:
+        match = self.match_pattern.match(line)
+        if not match:
+            return {}
+        return match.groupdict()
 
 class ReportFactory:
     _reports = {
